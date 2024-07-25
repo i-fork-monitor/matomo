@@ -82,6 +82,8 @@ class CliMulti
      */
     private $logger;
 
+    private $wasKilled = false;
+
     public function __construct(LoggerInterface $logger = null)
     {
         $this->supportsAsync = $this->supportsAsync();
@@ -161,6 +163,8 @@ class CliMulti
      */
     public function kill(): void
     {
+        $this->wasKilled = true;
+
         foreach ($this->processes as $process) {
             $process->killProcess();
         }
@@ -434,7 +438,29 @@ class CliMulti
 
         try {
             $this->logger->debug("Execute HTTP API request: "  . $url);
-            $response = Http::sendHttpRequestBy('curl', $url, $timeout = 0, $userAgent = null, $destinationPath = null, $file = null, $followDepth = 0, $acceptLanguage = false, $this->acceptInvalidSSLCertificate, false, false, 'POST', null, null, $requestBody, [], $forcePost = true);
+            $response = Http::sendHttpRequestBy(
+                'curl',
+                $url,
+                $timeout = 0,
+                $userAgent = null,
+                $destinationPath = null,
+                $file = null,
+                $followDepth = 0,
+                $acceptLanguage = false,
+                $this->acceptInvalidSSLCertificate,
+                false,
+                false,
+                'POST',
+                null,
+                null,
+                $requestBody,
+                [],
+                $forcePost = true,
+                true,
+                function () {
+                    return $this->wasKilled;
+                }
+            );
             $output->write($response);
         } catch (\Exception $e) {
             $message = "Got invalid response from API request: $url. ";

@@ -184,8 +184,10 @@ class Http
      * @param string $httpPassword HTTP Auth password
      * @param array|string $requestBody If $httpMethod is 'POST' this may accept an array of variables or a string that needs to be posted
      * @param array $additionalHeaders List of additional headers to set for the request
+     * @param bool $forcePost
      * @param bool $checkHostIsAllowed whether we should check if the target host is allowed or not. This should only
      *                                 be set to false when using a hardcoded URL.
+     * @param callback $abortFunction Callback used to check if requst should be aborted. When callback returns true, request will be aborted
      *
      * @return string|array  true (or string/array) on success; false on HTTP response error code (1xx or 4xx)
      *@throws Exception
@@ -208,7 +210,8 @@ class Http
         $requestBody = null,
         $additionalHeaders = array(),
         $forcePost = null,
-        $checkHostIsAllowed = true
+        $checkHostIsAllowed = true,
+        $abortFunction = null
     ) {
         if ($followDepth > 5) {
             throw new Exception('Too many redirects (' . $followDepth . ')');
@@ -670,6 +673,16 @@ class Http
                 CURLOPT_CONNECTTIMEOUT => $timeout,
                 CURLOPT_TIMEOUT        => $timeout,
             );
+
+            if ($abortFunction) {
+                $curl_options[CURLOPT_PROGRESSFUNCTION] = function () use ($abortFunction) {
+                    if ($abortFunction()) {
+                        return 1;
+                    }
+
+                    return 0;
+                };
+            }
 
             if ($rangeBytes) {
                 curl_setopt($ch, CURLOPT_RANGE, $rangeBytes);
