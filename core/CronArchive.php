@@ -37,6 +37,7 @@ use Piwik\Plugins\SitesManager\API as APISitesManager;
 use Piwik\Plugins\UsersManager\API as APIUsersManager;
 use Piwik\Plugins\UsersManager\UserPreferences;
 use Piwik\Log\LoggerInterface;
+use Piwik\Scheduler\Scheduler;
 
 /**
  * ./console core:archive runs as a cron and is a useful tool for general maintenance,
@@ -242,6 +243,18 @@ class CronArchive
     private $cliMultiHandler = null;
 
     /**
+     * @var Scheduler|null
+     */
+    private $scheduler = null;
+
+    private $step = 0;
+
+    private const STEP_INIT = 1;
+    private const STEP_ARCHIVING = 2;
+    private const STEP_SCHEDULED_TASKS = 3;
+    private const STEP_FINISH = 4;
+
+    /**
      * Constructor.
      *
      * @param LoggerInterface|null $logger
@@ -283,9 +296,13 @@ class CronArchive
         $self = $this;
         Access::doAsSuperUser(function () use ($self) {
             try {
+                $this->step = self::STEP_INIT;
                 $self->init();
+                $this->step = self::STEP_ARCHIVING;
                 $self->run();
+                $this->step = self::STEP_SCHEDULED_TASKS;
                 $self->runScheduledTasks();
+                $this->step = self::STEP_FINISH;
                 $self->end();
             } catch (StopArchiverException $e) {
                 $this->logger->info("Archiving stopped by stop archiver exception" . $e->getMessage());
@@ -299,10 +316,22 @@ class CronArchive
 
         $this->signal = $signal;
 
+        // initialisation and fnishing can be killed directly.
+        if (in_array($this->step, [self::STEP_INIT, self::STEP_FINISH])) {
+            $this->logger->info('Archiving stopped');
+            exit;
+        }
+
         // kill all running archiving processes in case of \SIGTERM
         if (!empty($this->cliMultiHandler) && $signal === \SIGTERM) {
             $this->logger->info('Trying to kill running cli processes...');
             $this->cliMultiHandler->kill();
+        }
+
+        // kill all running archiving processes in case of \SIGTERM
+        if (!empty($this->scheduler)) {
+            $this->logger->info('Trying to kill running tasks...');
+            $this->scheduler->handleSignal($signal);
         }
 
         // Note: finishing the archiving process will be handled in `run()`
@@ -657,6 +686,10 @@ class CronArchive
      */
     public function end()
     {
+        if ($this->signal > 0) {
+            return; // Skip if abort signal has been received
+        }
+
         /**
          * This event is triggered after archiving.
          *
@@ -716,7 +749,8 @@ class CronArchive
         //         enable/disable the task
         Rules::$disablePureOutdatedArchive = true;
 
-        CoreAdminHomeAPI::getInstance()->runScheduledTasks();
+        $this->scheduler = StaticContainer::get(Scheduler::class);
+        $this->scheduler->run();
 
         $this->logSection("");
     }
