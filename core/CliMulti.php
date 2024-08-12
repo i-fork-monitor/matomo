@@ -11,13 +11,13 @@ namespace Piwik;
 
 use Piwik\Archiver\Request;
 use Piwik\CliMulti\CliPhp;
-use Piwik\CliMulti\Output;
 use Piwik\CliMulti\OutputInterface;
 use Piwik\CliMulti\Process;
 use Piwik\CliMulti\StaticOutput;
 use Piwik\Container\StaticContainer;
 use Piwik\Log\LoggerInterface;
 use Piwik\Log\NullLogger;
+use Symfony\Component\Process\Process as SymfonyProcess;
 
 /**
  * Class CliMulti.
@@ -34,7 +34,7 @@ class CliMulti
     public $supportsAsync = null;
 
     /**
-     * @var Process[]
+     * @var SymfonyProcess[]
      */
     private $processes = array();
 
@@ -166,7 +166,7 @@ class CliMulti
         $this->wasKilled = true;
 
         foreach ($this->processes as $process) {
-            $process->killProcess();
+            $process->stop(0);
         }
         $this->cleanup();
     }
@@ -196,19 +196,13 @@ class CliMulti
     private function executeUrlCommand($cmdId, $url, $numUrls)
     {
         if ($this->supportsAsync) {
-            if ($numUrls === 1) {
-                $output = new StaticOutput($cmdId);
-                $this->executeSyncCli($url, $output);
-            } else {
-                $output = new Output($cmdId);
-                $this->executeAsyncCli($url, $output, $cmdId);
-            }
+            $this->executeSymfonyCli($url);
         } else {
             $output = new StaticOutput($cmdId);
             $this->executeNotAsyncHttp($url, $output);
-        }
 
-        $this->outputs[] = $output;
+            $this->outputs[] = $output;
+        }
     }
 
     private function buildCommand($hostname, $query, $outputFileIfAsync, $doEsacpeArg = true)
@@ -240,10 +234,18 @@ class CliMulti
 
     private function getResponse()
     {
-        $response = array();
+        $response = [];
+        $contents = [];
+
+        foreach ($this->processes as $process) {
+            $contents[] = $process->getOutput();
+        }
 
         foreach ($this->outputs as $output) {
-            $content = $output->get();
+            $contents[] = $output->get();
+        }
+
+        foreach ($contents as $content) {
             // Remove output that can be ignored in climulti . works around some worpdress setups where the hash bang may
             // be printed
             $search = '#!/usr/bin/env php';
@@ -260,44 +262,24 @@ class CliMulti
         return $response;
     }
 
-    private function hasFinished()
+    private function waitUntilFinished(): void
     {
-        foreach ($this->processes as $index => $process) {
-            $hasStarted = $process->hasStarted();
+        $startTime = time();
+        do {
+            $elapsed = time() - $startTime;
+            $timeToWait = $this->getTimeToWaitBeforeNextCheck($elapsed);
 
-            if (!$hasStarted && 8 <= $process->getSecondsSinceCreation()) {
-                // if process was created more than 8 seconds ago but still not started there must be something wrong.
-                // ==> declare the process as finished
-                $process->finishProcess();
-                continue;
-            } elseif (!$hasStarted) {
-                return false;
+            if (count($this->processes)) {
+                usleep($timeToWait);
             }
+        } while (!$this->hasFinished());
+    }
 
+    private function hasFinished(): bool
+    {
+        foreach ($this->processes as $process) {
             if ($process->isRunning()) {
                 return false;
-            }
-
-            $pid = $process->getPid();
-            foreach ($this->outputs as $output) {
-                if ($output->getOutputId() === $pid && $output->isAbnormal()) {
-                    $process->finishProcess();
-                    continue;
-                }
-            }
-
-            if ($process->hasFinished()) {
-                // prevent from checking this process over and over again
-                unset($this->processes[$index]);
-
-                if ($this->isTimingRequests) {
-                    $this->timers[$index]->finish();
-                }
-
-                if ($this->onProcessFinish) {
-                    $onProcessFinish = $this->onProcessFinish;
-                    $onProcessFinish($pid);
-                }
             }
         }
 
@@ -343,7 +325,7 @@ class CliMulti
     private function cleanup()
     {
         foreach ($this->processes as $pid) {
-            $pid->finishProcess();
+            $pid->stop();
         }
 
         foreach ($this->outputs as $output) {
@@ -383,32 +365,19 @@ class CliMulti
         return StaticContainer::get('path.tmp') . '/climulti';
     }
 
-    private function executeAsyncCli($url, Output $output, $cmdId)
-    {
-        $this->processes[] = new Process($cmdId);
-
-        $url = $this->appendTestmodeParamToUrlIfNeeded($url);
-        $query = UrlHelper::getQueryFromUrl($url, ['pid' => $cmdId, 'runid' => Common::getProcessId()]);
-        $hostname = Url::getHost($checkIfTrusted = false);
-        $command = $this->buildCommand($hostname, $query, $output->getPathToFile());
-
-        $this->logger->debug("Running command: {command}", ['command' => $command]);
-        shell_exec($command);
-    }
-
-    private function executeSyncCli($url, StaticOutput $output)
+    private function executeSymfonyCli($url): void
     {
         $url = $this->appendTestmodeParamToUrlIfNeeded($url);
         $query = UrlHelper::getQueryFromUrl($url, array());
         $hostname = Url::getHost($checkIfTrusted = false);
         $command = $this->buildCommand($hostname, $query, '', true);
 
+        $process = SymfonyProcess::fromShellCommandline($command);
+        $process->setTimeout(0);
+        $process->start();
+        $this->processes[] = $process;
+
         $this->logger->debug("Running command: {command}", ['command' => $command]);
-        $result = shell_exec($command);
-        if ($result) {
-            $result = trim($result);
-        }
-        $output->write($result);
     }
 
     private function executeNotAsyncHttp($url, StaticOutput $output)
@@ -497,16 +466,7 @@ class CliMulti
     private function requestUrls(array $piwikUrls)
     {
         $this->start($piwikUrls);
-
-        $startTime = time();
-        do {
-            $elapsed = time() - $startTime;
-            $timeToWait = $this->getTimeToWaitBeforeNextCheck($elapsed);
-
-            if (count($this->processes)) {
-                usleep($timeToWait);
-            }
-        } while (!$this->hasFinished());
+        $this->waitUntilFinished();
 
         $results = $this->getResponse();
         $this->cleanup();
