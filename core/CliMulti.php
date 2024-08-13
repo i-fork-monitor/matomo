@@ -164,7 +164,6 @@ class CliMulti
     public function kill(): void
     {
         $this->wasKilled = true;
-
         foreach ($this->processes as $process) {
             $process->killProcess();
         }
@@ -196,13 +195,8 @@ class CliMulti
     private function executeUrlCommand($cmdId, $url, $numUrls)
     {
         if ($this->supportsAsync) {
-            if ($numUrls === 1) {
-                $output = new StaticOutput($cmdId);
-                $this->executeSyncCli($url, $output);
-            } else {
-                $output = new Output($cmdId);
-                $this->executeAsyncCli($url, $output, $cmdId);
-            }
+            $output = new Output($cmdId);
+            $this->executeAsyncCli($url, $output, $cmdId);
         } else {
             $output = new StaticOutput($cmdId);
             $this->executeNotAsyncHttp($url, $output);

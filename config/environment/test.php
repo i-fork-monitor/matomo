@@ -1,10 +1,13 @@
 <?php
 
 use Piwik\Container\Container;
+use Piwik\Option;
 use Piwik\Piwik;
+use Piwik\Request;
 use Piwik\Tests\Framework\Mock\FakeAccess;
 use Piwik\Tests\Framework\Mock\FakeChangesModel;
 use Piwik\Tests\Framework\Mock\TestConfig;
+use Piwik\Tests\Integration\CronArchiveProcessSignalTest;
 
 return array(
 
@@ -122,6 +125,58 @@ return array(
             $useOverrideJs = \Piwik\Container\StaticContainer::get('test.vars.useOverrideJs');
             if ($useOverrideJs) {
                 $jsFiles[] = 'tests/resources/screenshot-override/override.js';
+            }
+        })),
+
+        array('CronArchive.init.start', \Piwik\Di::value(function () {
+            if ('1' !== getenv(CronArchiveProcessSignalTest::ENV_TRIGGER)) {
+                return;
+            }
+
+            for ($i = 0; $i < 10; $i++) {
+                $doStart = (bool) Option::get(CronArchiveProcessSignalTest::OPTION_START);
+
+                if ($doStart) {
+                    break;
+                }
+
+                sleep(1);
+            }
+
+            if (!$doStart) {
+                echo 'Waiting for start option took too long!' . PHP_EOL;
+                exit(127);
+            }
+        })),
+
+        array('CronArchive.alterArchivingRequestUrl', \Piwik\Di::value(function (&$url) {
+            if ('1' !== getenv(CronArchiveProcessSignalTest::ENV_TRIGGER)) {
+                return;
+            }
+
+            $url .= '&' . CronArchiveProcessSignalTest::ENV_TRIGGER . '=1';
+        })),
+
+        array('API.CoreAdminHome.archiveReports', \Piwik\Di::value(function () {
+            $request = Request::fromRequest();
+
+            if (!$request->getBoolParameter(CronArchiveProcessSignalTest::ENV_TRIGGER, false)) {
+                return;
+            }
+
+            for ($i = 0; $i < 10; $i++) {
+                $doStart = (bool) Option::get(CronArchiveProcessSignalTest::OPTION_ARCHIVE);
+
+                if ($doStart) {
+                    break;
+                }
+
+                sleep(1);
+            }
+
+            if (!$doStart) {
+                echo 'Waiting for archive option took too long!' . PHP_EOL;
+                exit(127);
             }
         })),
 
