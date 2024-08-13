@@ -36,6 +36,11 @@ class Updater
     public const DOWNLOAD_TIMEOUT = 720;
 
     /**
+     * @var CliMulti
+     */
+    private $cliMulti;
+
+    /**
      * @var Translator
      */
     private $translator;
@@ -50,8 +55,13 @@ class Updater
      */
     private $tmpPath;
 
-    public function __construct(Translator $translator, ReleaseChannels $releaseChannels, $tmpPath)
-    {
+    public function __construct(
+        CliMulti $cliMulti,
+        Translator $translator,
+        ReleaseChannels $releaseChannels,
+        $tmpPath
+    ) {
+        $this->cliMulti = $cliMulti;
         $this->translator = $translator;
         $this->releaseChannels = $releaseChannels;
         $this->tmpPath = $tmpPath;
@@ -119,8 +129,7 @@ class Updater
         $nonce = Common::generateUniqId();
         Option::set('NonceOneClickUpdatePartTwo', json_encode(['nonce' => $nonce, 'ttl' => $validFor10Minutes]));
 
-        $cliMulti = new CliMulti();
-        $responses = $cliMulti->request(['?module=CoreUpdater&action=oneClickUpdatePartTwo&nonce=' . $nonce]);
+        $responses = $this->cliMulti->request(['?module=CoreUpdater&action=oneClickUpdatePartTwo&nonce=' . $nonce]);
 
         if (!empty($responses)) {
             $responseCliMulti = array_shift($responses);
